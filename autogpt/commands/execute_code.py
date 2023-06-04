@@ -2,6 +2,7 @@
 import os
 import subprocess
 from pathlib import Path
+import ast
 
 import docker
 from docker.errors import ImageNotFound
@@ -9,6 +10,18 @@ from docker.errors import ImageNotFound
 from autogpt.commands.command import command
 from autogpt.config import Config
 from autogpt.logs import logger
+
+
+def get_imports(filepath):
+    with open(filepath, "r") as file:
+        root = ast.parse(file.read())
+
+    for node in ast.iter_child_nodes(root):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name
+        elif isinstance(node, ast.ImportFrom):
+            yield node.module
 
 
 @command("execute_python_file", "Execute Python File", '"filename": "<filename>"')
@@ -61,9 +74,16 @@ def execute_python_file(filename: str, config: Config) -> str:
                     logger.info(f"{status}: {progress}")
                 elif status:
                     logger.info(status)
+        
+        imports = list(get_imports(filename))
+        requirements_filepath = Path(filename).parent / "requirements.txt"
+        with open(requirements_filepath, "w") as file:
+            for module in imports:
+                file.write(module + "\n")
+        
         container = client.containers.run(
             image_name,
-            ["python", str(Path(filename).relative_to(config.workspace_path))],
+            ["/bin/sh", "-c", f"python -m pip install -r {str(Path(requirements_filepath).relative_to(config.workspace_path))} > /dev/null && python " + str(Path(filename).relative_to(config.workspace_path))],
             volumes={
                 config.workspace_path: {
                     "bind": "/workspace",
